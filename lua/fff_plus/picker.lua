@@ -95,7 +95,9 @@ function Picker:replace_query(query, history_index)
   self:set_query(query)
   self.history_index = history_index
   if self.input_buf and vim.api.nvim_buf_is_valid(self.input_buf) then
+    self.replacing_query = true
     vim.api.nvim_buf_set_lines(self.input_buf, 0, -1, false, { self.query })
+    self.replacing_query = false
     if self.input_win and vim.api.nvim_win_is_valid(self.input_win) then
       pcall(vim.api.nvim_win_set_cursor, self.input_win, { 1, #self.query })
     end
@@ -635,6 +637,7 @@ end
 function Picker:setup_input_listener()
   vim.api.nvim_buf_attach(self.input_buf, false, {
     on_lines = function()
+      if self.replacing_query then return end
       vim.schedule(function()
         if not self.active or not vim.api.nvim_buf_is_valid(self.input_buf) then return end
         local line = vim.api.nvim_buf_get_lines(self.input_buf, 0, 1, false)[1] or ''
@@ -659,6 +662,21 @@ function Picker:open()
   M.last = self
 
   local group = vim.api.nvim_create_augroup(self.augroup_name, { clear = true })
+  vim.api.nvim_create_autocmd('WinEnter', {
+    group = group,
+    callback = function()
+      vim.schedule(function()
+        if not self.active then return end
+        local current = vim.api.nvim_get_current_win()
+        local picker_window = current == self.input_win
+          or current == self.list_win
+          or current == self.preview_win
+          or current == self.help_win
+        if not picker_window then self:close(false) end
+      end)
+    end,
+    desc = 'Close the active fff-plus picker when focus leaves',
+  })
   vim.api.nvim_create_autocmd('VimResized', {
     group = group,
     callback = function()

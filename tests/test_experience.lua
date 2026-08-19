@@ -50,6 +50,14 @@ assert(browsing:history_next() == 'beta', 'history should walk toward newer quer
 browsing:set_query('manual')
 assert(browsing:history_next() == 'manual', 'typing should leave query-history navigation')
 
+local open_history = picker.pick(spec, { enter = false })
+assert(open_history:history_previous() == 'beta', 'open picker history should start with the newest query')
+vim.wait(10)
+assert(open_history:history_previous() == 'alpha', 'programmatic input replacement should preserve the history index')
+vim.wait(10)
+assert(open_history:history_next() == 'beta', 'open picker history should traverse forward after replacement')
+open_history:close(false)
+
 local help = browsing:help_lines()
 assert(table.concat(help, '\n'):find('refresh', 1, true), 'help should describe shared actions')
 
@@ -64,7 +72,19 @@ resumed:toggle_maximize()
 assert(resumed.maximized == true, 'maximize should be shared picker state')
 resumed:focus('list')
 assert(vim.api.nvim_get_current_win() == resumed.list_win, 'focus actions should switch picker panes')
-resumed:close(false)
+local outside_buf = vim.api.nvim_create_buf(false, true)
+local outside_win = vim.api.nvim_open_win(outside_buf, true, {
+  relative = 'editor',
+  width = 10,
+  height = 2,
+  col = 0,
+  row = 0,
+  style = 'minimal',
+})
+vim.wait(10)
+assert(not resumed.active, 'picker should close when focus moves to an external window')
+vim.api.nvim_win_close(outside_win, true)
+vim.api.nvim_buf_delete(outside_buf, { force = true })
 
 local factory_opts
 local factory = picker.create({
