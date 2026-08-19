@@ -52,8 +52,80 @@ local function test_picker_modules_load()
   assert(type(buffers.open) == 'function', 'buffers.open should be a function')
   assert(type(colors.open) == 'function', 'colors.open should be a function')
   assert(type(git_files.open) == 'function', 'git_files.open should be a function')
+  assert(type(git_files.create) == 'function', 'git_files.create should build a shared picker adapter')
   assert(type(git_files.get_git_root) == 'function', 'git_files.get_git_root should be a function')
   print('✓ fff_plus picker modules load correctly')
+end
+
+local function test_git_shared_picker_adapter()
+  print('Testing Git shared picker adapter...')
+  local git_files = require('fff_plus.pickers.git_files')
+  local original_root = git_files.get_git_root
+  local original_status = git_files.get_git_status_files
+  git_files.get_git_root = function(cwd, done)
+    assert(cwd == '/repo/work')
+    done('/repo')
+    return { kill = function() end }
+  end
+  git_files.get_git_status_files = function(root, done)
+    assert(root == '/repo')
+    done({
+      {
+        name = 'README.md',
+        path = '/repo/README.md',
+        relative_path = 'README.md',
+        git_status = 'modified',
+      },
+    })
+    return { kill = function() end }
+  end
+
+  local instance = git_files.create({ cwd = '/repo/work', enter = false, preview = { enabled = false } })
+  instance:refresh()
+  git_files.get_git_root = original_root
+  git_files.get_git_status_files = original_status
+
+  assert(instance.spec.name == 'git_files', 'Git files should use the shared picker interface')
+  assert(instance.git_root == '/repo' and instance:count() == 1, 'Git adapter should resolve and load asynchronously')
+  assert(instance:format(instance:current()).text:find('README.md', 1, true), 'Git adapter should format source items')
+  instance:close(false)
+  print('✓ Git files uses the shared picker interface')
+end
+
+local function test_colors_shared_picker_adapter()
+  print('Testing colors shared picker adapter...')
+  local colors = require('fff_plus.pickers.colors')
+  local original_items = colors.get_colorscheme_items
+  colors.get_colorscheme_items = function()
+    return {
+      { name = 'default', current = true },
+      { name = 'habamax', current = false },
+    }
+  end
+
+  local instance = colors.create({ enter = false })
+  instance:refresh()
+  colors.get_colorscheme_items = original_items
+
+  assert(instance.spec.name == 'colors', 'colors should be a shared picker adapter')
+  assert(instance:count() == 2, 'colors adapter should supply colorscheme items')
+  assert(instance:format(instance:current()).text:find('default', 1, true), 'colors adapter should format its items')
+  instance:close(false)
+  print('✓ colors uses the shared picker interface')
+end
+
+local function test_buffers_shared_picker_adapter()
+  print('Testing buffers shared picker adapter...')
+  local buffers = require('fff_plus.pickers.buffers')
+  local instance = buffers.create({ enter = false, preview = { enabled = false } })
+  instance:refresh()
+
+  assert(instance.spec.name == 'buffers', 'buffers should be a shared picker adapter')
+  assert(instance:count() >= 1, 'buffers adapter should supply listed buffers')
+  local formatted = instance:format(instance:current())
+  assert(formatted.text and formatted.match_offset, 'buffers adapter should align formatting with match highlights')
+  instance:close(false)
+  print('✓ buffers uses the shared picker interface')
 end
 
 local function test_fuzzy_matcher()
@@ -82,12 +154,8 @@ local function test_fuzzy_matcher()
   assert(#color_matches == 1, 'colors picker should use fuzzy subsequence matching')
 
   local git_files = require('fff_plus.pickers.git_files')
-  git_files.state.active = true
-  git_files.state.items = { { relative_path = 'lua/fff_plus/matcher.lua' } }
-  git_files.state.query = 'fpm'
-  git_files.filter_results()
-  assert(#git_files.state.filtered_items == 1, 'Git picker should use fuzzy subsequence matching')
-  git_files.state.active = false
+  local git_matches = git_files.filter_files({ { relative_path = 'lua/fff_plus/matcher.lua' } }, 'fpm')
+  assert(#git_matches == 1, 'Git picker should use fuzzy subsequence matching')
   print('✓ fuzzy matcher ranks subsequence matches')
 end
 
@@ -148,15 +216,33 @@ local function test_git_sources()
   assert(status[3].git_status == 'untracked')
 
   local original_run = git_source.run
-  local captured
-  git_source.run = function(_, args)
-    captured = args
-    return 'diff --git a/file b/file\n'
+  local captured = {}
+  git_source.run = function(command, opts, done)
+    table.insert(captured, { command = command, opts = opts })
+    local output = command[2] == 'ls-files' and 'README.md\0'
+      or (command[2] == 'status' and ' M README.md\0' or 'diff --git a/file b/file\n')
+    done({ ok = true, code = 0, stdout = output, stderr = '' })
+    return { kill = function() end }
   end
-  local diff = git_source.diff('/repo', 'lua/file with spaces.lua')
+
+  local async_tracked
+  git_source.tracked('/repo', function(items) async_tracked = items end)
+  assert(async_tracked[1] == 'README.md', 'tracked should parse asynchronous process output')
+
+  local async_status
+  git_source.status('/repo', function(items) async_status = items end)
+  assert(async_status[1].git_status == 'modified', 'status should parse asynchronous process output')
+
+  local diff
+  git_source.diff('/repo', 'lua/file with spaces.lua', function(value) diff = value end)
+  local staged
+  git_source.stage('/repo', { 'lua/file with spaces.lua' }, function(ok) staged = ok end)
   git_source.run = original_run
   assert(diff:find('diff %-%-git'), 'Git diff should return command output')
-  assert(captured[1] == 'diff' and captured[#captured] == 'lua/file with spaces.lua')
+  assert(captured[3].command[2] == 'diff' and captured[3].command[#captured[3].command] == 'lua/file with spaces.lua')
+  assert(captured[3].opts.cwd == '/repo', 'Git commands should pass the repository as cwd')
+  assert(staged and captured[4].command[2] == 'add' and captured[4].command[3] == '--')
+  assert(captured[4].command[4] == 'lua/file with spaces.lua', 'Git mutations should preserve raw path argv')
   print('✓ Git sources preserve paths and rename records')
 end
 
@@ -199,38 +285,71 @@ local function test_picker_actions()
     path = vim.api.nvim_buf_get_name(bufnr),
   }
 
-  buffers.state.active = true
-  buffers.state.items = { buffer_item }
-  buffers.state.filtered_items = { buffer_item }
-  buffers.state.cursor = 1
-  buffers.state.selected = { [bufnr] = true }
-  buffers.state.config = { preview = { enabled = false }, jump_to_existing = true }
-  assert(buffers.find_existing_window(bufnr) == vim.api.nvim_get_current_win())
+  local buffer_picker = buffers.create({ preview = { enabled = false }, jump_to_existing = true })
+  buffer_picker.items = { buffer_item }
+  buffer_picker.filtered_items = { buffer_item }
+  buffer_picker.selected_keys = { [bufnr] = true }
+  buffers.state = buffer_picker
+  assert(buffers.find_existing_window(bufnr, buffer_picker) == vim.api.nvim_get_current_win())
 
-  local original_buffer_close = buffers.close
-  buffers.close = function() buffers.state.active = false end
-  buffers.send_to_quickfix()
-  buffers.close = original_buffer_close
+  buffer_picker:action('qflist')
   local buffer_qf = vim.fn.getqflist({ title = 1, items = 1 })
   assert(buffer_qf.title == 'FFF+ Buffers' and #buffer_qf.items == 1)
   vim.cmd('cclose')
 
   local git_files = require('fff_plus.pickers.git_files')
   local git_source = require('fff_plus.git_source')
-  local original_root = git_files.get_git_root
   local original_diff = git_source.diff
-  git_files.get_git_root = function() return '/repo' end
-  git_source.diff = function(root, path)
+  git_source.diff = function(root, path, done)
     assert(root == '/repo' and path == 'README.md')
-    return 'diff --git a/README.md b/README.md'
+    done('diff --git a/README.md b/README.md')
+    return { kill = function() end }
   end
-  git_files.state.source = 'status'
-  assert(git_files.get_git_diff({ relative_path = 'README.md', git_status = 'modified' }))
-  git_files.state.source = 'tracked'
-  assert(git_files.get_git_diff({ relative_path = 'README.md', git_status = 'clean' }) == nil)
-  git_files.get_git_root = original_root
+  local git_picker = git_files.create({ source = 'status', preview = { enabled = true } })
+  git_picker.git_root = '/repo'
+  local diff_preview
+  local diff_job = git_picker.spec.preview(
+    git_picker,
+    { path = '/repo/README.md', relative_path = 'README.md', git_status = 'modified' },
+    function(value) diff_preview = value end
+  )
   git_source.diff = original_diff
-  print('✓ picker actions populate quickfix, jump windows, and select diff previews')
+  assert(type(diff_job.kill) == 'function', 'Git diff preview should return a cancellable job')
+  assert(diff_preview.filetype == 'diff' and diff_preview.lines[1]:find('diff %-%-git'))
+
+  local original_stage = git_source.stage
+  local staged
+  git_source.stage = function(root, paths, done)
+    staged = { root = root, paths = paths }
+    done(true, { ok = true })
+    return { kill = function() end }
+  end
+  git_picker.items = {
+    { path = '/repo/README.md', relative_path = 'README.md', git_status = 'modified' },
+  }
+  git_picker.filtered_items = git_picker.items
+  git_picker.refresh = function() git_picker.refreshed = true end
+  git_picker:action('stage')
+  git_source.stage = original_stage
+  assert(staged.root == '/repo' and staged.paths[1] == 'README.md', 'stage should pass selected paths as argv')
+  assert(git_picker.refreshed == true, 'successful Git actions should refresh the picker')
+
+  local original_restore = git_source.restore
+  local restore_calls = 0
+  git_source.restore = function(_, _, done)
+    restore_calls = restore_calls + 1
+    done(true, { ok = true })
+    return { kill = function() end }
+  end
+  git_picker.opts.confirm_restore = function() return 2 end
+  git_picker:action('restore')
+  assert(restore_calls == 0, 'cancelled restore confirmation should not mutate the worktree')
+  git_picker.opts.confirm_restore = function() return 1 end
+  git_picker:action('restore')
+  git_source.restore = original_restore
+  assert(restore_calls == 1, 'confirmed restore should mutate the worktree once')
+  git_picker:close(false)
+  print('✓ picker actions populate quickfix, jump windows, async previews, and Git mutations')
 end
 
 local function test_commands_register()
@@ -244,12 +363,24 @@ local function test_commands_register()
   assert(vim.fn.exists(':FFFPlusGitStatus') == 2, 'FFFPlusGitStatus command should exist')
   assert(type(require('fff_plus').tracked_files) == 'function', 'tracked_files API should exist')
   assert(type(require('fff_plus').git_status) == 'function', 'git_status API should exist')
+  assert(type(require('fff_plus').smart) == 'function', 'smart API should exist')
+  assert(type(require('fff_plus').lines) == 'function', 'lines API should exist')
+  assert(type(require('fff_plus').loaded_lines) == 'function', 'loaded_lines API should exist')
+  assert(type(require('fff_plus').diagnostics) == 'function', 'diagnostics API should exist')
+  assert(type(require('fff_plus').buffer_diagnostics) == 'function', 'buffer_diagnostics API should exist')
+  assert(type(require('fff_plus').resume) == 'function', 'resume API should exist')
 
   local commands = vim.api.nvim_get_commands({ builtin = false })
   assert(commands.FFFPlusBuffers.bang, 'FFFPlusBuffers should support fullscreen bang')
   assert(commands.FFFPlusColors.bang, 'FFFPlusColors should support fullscreen bang')
   assert(commands.FFFPlusGitFiles.bang, 'FFFPlusGitFiles should support fullscreen bang')
   assert(commands.FFFPlusGitStatus.bang, 'FFFPlusGitStatus should support fullscreen bang')
+  assert(commands.FFFPlusSmart.bang, 'FFFPlusSmart should support fullscreen bang')
+  assert(commands.FFFPlusLines.bang, 'FFFPlusLines should support fullscreen bang')
+  assert(commands.FFFPlusLoadedLines.bang, 'FFFPlusLoadedLines should support fullscreen bang')
+  assert(commands.FFFPlusDiagnostics.bang, 'FFFPlusDiagnostics should support fullscreen bang')
+  assert(commands.FFFPlusBufferDiagnostics.bang, 'FFFPlusBufferDiagnostics should support fullscreen bang')
+  assert(commands.FFFPlusResume.bang, 'FFFPlusResume should support fullscreen bang')
 
   require('fff_plus').setup({ legacy_commands = true })
   local plus = require('fff_plus')
@@ -274,6 +405,9 @@ local function run_tests()
   local tests = {
     test_extension_module_loads,
     test_picker_modules_load,
+    test_colors_shared_picker_adapter,
+    test_buffers_shared_picker_adapter,
+    test_git_shared_picker_adapter,
     test_fuzzy_matcher,
     test_viewport_calculation,
     test_picker_layout,
@@ -295,6 +429,4 @@ local function run_tests()
   return true
 end
 
-if arg[0]:match('test_fff_plus_extension') then
-  if not run_tests() then os.exit(1) end
-end
+if not run_tests() then error('fff-plus extension tests failed') end
