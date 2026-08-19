@@ -325,16 +325,28 @@ local function test_picker_actions()
   local canceled_item = { path = '/repo/old.lua', relative_path = 'old.lua', git_status = 'modified' }
   local current_item = { path = '/repo/new.lua', relative_path = 'new.lua', git_status = 'modified' }
   git_picker.active = true
-  git_picker.filtered_items = { current_item }
+  git_picker.filtered_items = { canceled_item }
+  git_picker.preview_generation = 1
   local fallback_previews = 0
   local preview_api = package.loaded['fff.file_picker.preview']
   local original_preview = preview_api.preview
   preview_api.preview = function() fallback_previews = fallback_previews + 1 end
   git_picker.spec.preview(git_picker, canceled_item, function() end)
+  git_picker.preview_generation = 2
+  canceled_callback(nil)
+  assert(fallback_previews == 0, 'canceled Git previews should not overwrite a newer preview of the same item')
+
+  git_picker.filtered_items = { current_item }
+  git_picker.spec.preview(git_picker, canceled_item, function() end)
+  canceled_callback(nil)
+  assert(fallback_previews == 0, 'canceled Git previews should not overwrite the current preview')
+
+  git_picker.filtered_items = { canceled_item }
+  git_picker.spec.preview(git_picker, canceled_item, function() end)
   canceled_callback(nil)
   preview_api.preview = original_preview
   git_source.diff = original_diff
-  assert(fallback_previews == 0, 'canceled Git previews should not overwrite the current preview')
+  assert(fallback_previews == 1, 'the current Git preview should still fall back to the raw file')
 
   local original_stage = git_source.stage
   local staged
