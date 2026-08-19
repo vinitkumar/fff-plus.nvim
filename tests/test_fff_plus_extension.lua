@@ -323,6 +323,7 @@ local function test_picker_actions()
     return { kill = function() end }
   end
   local canceled_item = { path = '/repo/old.lua', relative_path = 'old.lua', git_status = 'modified' }
+  local current_item = { path = '/repo/new.lua', relative_path = 'new.lua', git_status = 'modified' }
   git_picker.active = true
   git_picker.filtered_items = { canceled_item }
   git_picker.preview_generation = 1
@@ -335,6 +336,12 @@ local function test_picker_actions()
   canceled_callback(nil)
   assert(fallback_previews == 0, 'canceled Git previews should not overwrite a newer preview of the same item')
 
+  git_picker.filtered_items = { current_item }
+  git_picker.spec.preview(git_picker, canceled_item, function() end)
+  canceled_callback(nil)
+  assert(fallback_previews == 0, 'canceled Git previews should not overwrite the current preview')
+
+  git_picker.filtered_items = { canceled_item }
   git_picker.spec.preview(git_picker, canceled_item, function() end)
   canceled_callback(nil)
   preview_api.preview = original_preview

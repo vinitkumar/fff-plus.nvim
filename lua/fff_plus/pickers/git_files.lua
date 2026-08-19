@@ -106,7 +106,9 @@ local function preview_item(instance, item, done)
   local generation = instance.preview_generation
   return git_source.diff(instance.git_root, item.relative_path, function(diff)
     if not diff then
-      if instance.active and generation == instance.preview_generation then preview_file(instance, item) end
+      if instance.active and generation == instance.preview_generation and instance:current() == item then
+        preview_file(instance, item)
+      end
       return
     end
     done({
