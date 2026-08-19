@@ -105,7 +105,7 @@ local function preview_item(instance, item, done)
   if instance.source ~= 'status' or item.git_status == 'untracked' then return preview_file(instance, item) end
   return git_source.diff(instance.git_root, item.relative_path, function(diff)
     if not diff then
-      preview_file(instance, item)
+      if instance.active and instance:current() == item then preview_file(instance, item) end
       return
     end
     done({
