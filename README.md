@@ -11,11 +11,11 @@ day but do not need to live in the backend project.
 
 ## Usage demo
 
-Tracked-file fuzzy search, Git-status diff preview and multi-select, quickfix,
-and the fullscreen buffer picker are shown below. Click the preview for the
-MP4 version.
+The shared picker platform is shown below: Smart source aggregation,
+field-aware `kind:buffer` filtering, responsive preview, selection, and
+built-in key help. Click the preview for the MP4 version.
 
-[![fff-plus.nvim picker usage demo](./assets/fff-plus-usage.gif)](./assets/fff-plus-usage.mp4)
+[![fff-plus.nvim shared picker enhancements demo](./assets/fff-plus-usage.gif)](./assets/fff-plus-usage.mp4)
 
 ## Installation
 
